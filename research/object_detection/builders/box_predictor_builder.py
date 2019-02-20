@@ -26,6 +26,7 @@ from object_detection.predictors.heads import class_head
 from object_detection.predictors.heads import keras_box_head
 from object_detection.predictors.heads import keras_class_head
 from object_detection.predictors.heads import mask_head
+from object_detection.predictors.heads import keypoint_head
 from object_detection.protos import box_predictor_pb2
 
 
@@ -392,6 +393,89 @@ def build_mask_rcnn_box_predictor(is_training,
       class_prediction_head=class_prediction_head,
       third_stage_heads=third_stage_heads)
 
+def build_keypoint_predictor(is_training,
+                                      num_classes,
+                                      conv_hyperparams_fn,
+                                      min_depth,
+                                      max_depth,
+                                      num_layers_before_predictor,
+                                      use_dropout,
+                                      dropout_keep_prob,
+                                      kernel_size,
+                                      box_code_size,
+                                      apply_sigmoid_to_scores=False,
+                                      add_background_class=True,
+                                      class_prediction_bias_init=0.0,
+                                      use_depthwise=False,):
+  """Builds the ConvolutionalBoxPredictor from the arguments.
+
+  Args:
+    is_training: Indicates whether the BoxPredictor is in training mode.
+    num_classes: number of classes.  Note that num_classes *does not*
+      include the background category, so if groundtruth labels take values
+      in {0, 1, .., K-1}, num_classes=K (and not K+1, even though the
+      assigned classification targets can range from {0,... K}).
+    conv_hyperparams_fn: A function to generate tf-slim arg_scope with
+      hyperparameters for convolution ops.
+    min_depth: Minimum feature depth prior to predicting box encodings
+      and class predictions.
+    max_depth: Maximum feature depth prior to predicting box encodings
+      and class predictions. If max_depth is set to 0, no additional
+      feature map will be inserted before location and class predictions.
+    num_layers_before_predictor: Number of the additional conv layers before
+      the predictor.
+    use_dropout: Option to use dropout or not.  Note that a single dropout
+      op is applied here prior to both box and class predictions, which stands
+      in contrast to the ConvolutionalBoxPredictor below.
+    dropout_keep_prob: Keep probability for dropout.
+      This is only used if use_dropout is True.
+    kernel_size: Size of final convolution kernel.  If the
+      spatial resolution of the feature map is smaller than the kernel size,
+      then the kernel size is automatically set to be
+      min(feature_width, feature_height).
+    box_code_size: Size of encoding for each box.
+    apply_sigmoid_to_scores: If True, apply the sigmoid on the output
+      class_predictions.
+    add_background_class: Whether to add an implicit background class.
+    class_prediction_bias_init: Constant value to initialize bias of the last
+      conv2d layer before class prediction.
+    use_depthwise: Whether to use depthwise convolutions for prediction
+      steps. Default is False.
+
+  Returns:
+    A ConvolutionalBoxPredictor class.
+  """
+
+  box_prediction_head = keypoint_head.MaskRCNNKeypointHead(
+     num_keypoints=4,
+     conv_hyperparams_fn=None,
+     keypoint_heatmap_height=56,
+     keypoint_heatmap_width=56,
+     keypoint_prediction_num_conv_layers=8,
+     keypoint_prediction_conv_depth=512
+  )
+
+  class_prediction_head = class_head.ConvolutionalClassHead(
+      is_training=is_training,
+      num_class_slots=num_classes + 1 if add_background_class else num_classes,
+      use_dropout=use_dropout,
+      dropout_keep_prob=dropout_keep_prob,
+      kernel_size=kernel_size,
+      apply_sigmoid_to_scores=apply_sigmoid_to_scores,
+      class_prediction_bias_init=class_prediction_bias_init,
+      use_depthwise=use_depthwise)
+  other_heads = {}
+  return convolutional_box_predictor.ConvolutionalBoxPredictor(
+      is_training=is_training,
+      num_classes=num_classes,
+      box_prediction_head=box_prediction_head,
+      class_prediction_head=class_prediction_head,
+      other_heads=other_heads,
+      conv_hyperparams_fn=conv_hyperparams_fn,
+      num_layers_before_predictor=num_layers_before_predictor,
+      min_depth=min_depth,
+      max_depth=max_depth)
+
 
 def build_score_converter(score_converter_config, is_training):
   """Builds score converter based on the config.
@@ -544,6 +628,28 @@ def build(argscope_fn, box_predictor_config, is_training, num_classes,
             config_box_predictor.masks_are_class_agnostic),
         convolve_then_upsample_masks=(
             config_box_predictor.convolve_then_upsample_masks))
+
+  if box_predictor_oneof == 'keypoint_predictor':
+    config_box_predictor = box_predictor_config.keypoint_predictor
+    conv_hyperparams_fn = argscope_fn(config_box_predictor.conv_hyperparams,
+                                      is_training)
+    return build_keypoint_predictor(
+        is_training=is_training,
+        num_classes=num_classes,
+        add_background_class=add_background_class,
+        conv_hyperparams_fn=conv_hyperparams_fn,
+        use_dropout=config_box_predictor.use_dropout,
+        dropout_keep_prob=config_box_predictor.dropout_keep_probability,
+        box_code_size=config_box_predictor.box_code_size,
+        kernel_size=config_box_predictor.kernel_size,
+        num_layers_before_predictor=(
+            config_box_predictor.num_layers_before_predictor),
+        min_depth=config_box_predictor.min_depth,
+        max_depth=config_box_predictor.max_depth,
+        apply_sigmoid_to_scores=config_box_predictor.apply_sigmoid_to_scores,
+        class_prediction_bias_init=(
+            config_box_predictor.class_prediction_bias_init),
+        use_depthwise=config_box_predictor.use_depthwise)
 
   if box_predictor_oneof == 'rfcn_box_predictor':
     config_box_predictor = box_predictor_config.rfcn_box_predictor
